@@ -9,6 +9,28 @@
   </head>
   <body>
     <canvas id="game" tabindex="0" aria-label="Daniel platform game draft"></canvas>
+    <div id="loading-overlay" class="loading-overlay" role="status" aria-live="polite">
+      <div class="loading-panel">
+        <div class="loading-mark" aria-hidden="true">
+          <span></span>
+          <span></span>
+          <span></span>
+        </div>
+        <div id="loading-text" class="loading-text">Loading 0%</div>
+        <div class="loading-track" aria-hidden="true">
+          <div id="loading-bar" class="loading-bar"></div>
+        </div>
+      </div>
+    </div>
+    <button id="mute-toggle" class="mute-toggle" type="button" aria-label="Mute music" aria-pressed="false" title="Mute music">
+      <span class="mute-icon" aria-hidden="true">
+        <span class="speaker-block"></span>
+        <span class="speaker-cone"></span>
+        <span class="sound-wave sound-wave-small"></span>
+        <span class="sound-wave sound-wave-large"></span>
+        <span class="mute-slash"></span>
+      </span>
+    </button>
     <script type="module" src="src/game.js"></script>
   </body>
 </html>

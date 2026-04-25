@@ -1,65 +1,82 @@
 const canvas = document.getElementById("game");
 const ctx = canvas.getContext("2d", { alpha: false });
+const muteToggle = document.getElementById("mute-toggle");
+const loadingOverlay = document.getElementById("loading-overlay");
+const loadingText = document.getElementById("loading-text");
+const loadingBar = document.getElementById("loading-bar");
 
 const keys = new Set();
+const musicStorageKey = "daniel-platformer-music-muted";
+const music = createMusicController();
 
 const danielSheets = {
-  idle: loadSheet("assets/daniel-step-sheet.png", 6, 6, 6.5),
-  walk: loadSheet("assets/daniel-walk-sheet.png", 6, 6, 13),
-  turn: loadSheet("assets/daniel-turn-sheet.png", 6, 6, 24),
-  jump: loadSheet("assets/daniel-jump-sheet.png", 6, 6, 18, {
+  idle: loadSheet("assets/daniel-step-sheet.webp", 6, 6, 6.5),
+  walk: loadSheet("assets/daniel-walk-sheet.webp", 6, 6, 13),
+  turn: loadSheet("assets/daniel-turn-sheet.webp", 6, 6, 24),
+  jump: loadSheet("assets/daniel-jump-sheet.webp", 6, 6, 18, {
     referenceFrames: [0, 1, 2, 30, 31, 32, 33, 34, 35],
   }),
-  stop: loadSheet("assets/daniel-stop-sheet.png", 5, 5, 18),
+  stop: loadSheet("assets/daniel-stop-sheet.webp", 5, 5, 18),
 };
 
 const girlSheets = {
-  idle: loadSheet("assets/girl-idle-sheet.png", 6, 6, 6.5),
-  walk: loadSheet("assets/girl-walk-sheet.png", 6, 6, 13),
-  turn: loadSheet("assets/girl-turn-sheet.png", 6, 6, 22),
-  jump: loadSheet("assets/girl-jump-sheet.png", 6, 6, 18, {
+  idle: loadSheet("assets/girl-idle-sheet.webp", 6, 6, 6.5),
+  walk: loadSheet("assets/girl-walk-sheet.webp", 6, 6, 13),
+  turn: loadSheet("assets/girl-turn-sheet.webp", 6, 6, 22),
+  jump: loadSheet("assets/girl-jump-sheet.webp", 6, 6, 18, {
     referenceFrames: [0, 1, 2, 30, 31, 32, 33, 34, 35],
   }),
-  stop: loadSheet("assets/girl-stop-sheet.png", 4, 4, 18),
+  stop: loadSheet("assets/girl-stop-sheet.webp", 4, 4, 18),
 };
 
 const piggybackSheets = {
-  idle: loadSheet("assets/piggyback-idle-sheet.png", 6, 6, 6.5),
-  mount: loadSheet("assets/piggyback-mount-sheet.png", 6, 6, 22),
-  dismount: loadSheet("assets/piggyback-dismount-sheet.png", 6, 6, 22),
-  start: loadSheet("assets/piggyback-start-run-sheet.png", 4, 4, 20),
-  stop: loadSheet("assets/piggyback-stop-run-sheet.png", 6, 6, 20),
-  run: loadSheet("assets/piggyback-run-sheet.png", 6, 6, 18),
+  idle: loadSheet("assets/piggyback-idle-sheet.webp", 6, 6, 6.5),
+  mount: loadSheet("assets/piggyback-mount-sheet.webp", 6, 6, 22),
+  dismount: loadSheet("assets/piggyback-dismount-sheet.webp", 6, 6, 22),
+  start: loadSheet("assets/piggyback-start-run-sheet.webp", 4, 4, 20),
+  stop: loadSheet("assets/piggyback-stop-run-sheet.webp", 6, 6, 20),
+  turn: loadSheet("assets/piggyback-turn-sheet.webp", 6, 6, 22),
+  run: loadSheet("assets/piggyback-run-sheet.webp", 6, 6, 18),
 };
 
 const legacyBackTurn = {
-  back: loadImage("assets/daniel-pose-back.png"),
-  backThreeQuarter: loadImage("assets/daniel-pose-back-three-quarter.png"),
+  back: loadImage("assets/daniel-pose-back.webp"),
+  backThreeQuarter: loadImage("assets/daniel-pose-back-three-quarter.webp"),
 };
 
 const sceneLayers = {
   farBackground: [
-    loadLayer("assets/layers/far-sky-pattern.png", {
+    loadLayer("assets/layers/far-sky-pattern.webp", {
       parallax: 0.08,
       alignY: "bottom",
     }),
   ],
   midBackground: [
-    loadLayer("assets/layers/mid-landscape-faded.png", {
+    loadLayer("assets/layers/mid-landscape-faded.webp", {
       parallax: 0.18,
       alignY: "bottom",
       overlapRatio: 0.06,
     }),
   ],
   foreground: [
-    loadLayer("assets/layers/ground-strip-faded.png", {
+    loadLayer("assets/layers/ground-strip-faded.webp", {
       parallax: 1,
       alignY: "ground",
       groundAnchorRatio: 0.68,
       overlapRatio: 0.18,
     }),
   ],
-  frontOfSprites: [],
+  frontOfSprites: [
+    loadLayer("assets/layers/front-foreground-faded.webp", {
+      parallax: 1.18,
+      alignY: "ground",
+      groundAnchorRatio: 0.76,
+      overlapRatio: 0.08,
+      targetHeightRatio: 0.18,
+      minTileWidthRatio: 0.82,
+      opacity: 0.28,
+    }),
+  ],
 };
 
 const physics = {
@@ -133,6 +150,98 @@ const mountAssist = {
   targetGirlX: 0,
 };
 
+function createMusicController() {
+  const audio = new Audio();
+  audio.preload = "none";
+  audio.volume = 0.42;
+  audio.loop = false;
+  audio.src = "assets/audio/braided-path.mp3";
+
+  return {
+    audio,
+    tracks: ["assets/audio/braided-path.mp3", "assets/audio/braided-path-2.mp3"],
+    index: 0,
+    muted: readStoredMusicMute(),
+    unlocked: false,
+  };
+}
+
+function readStoredMusicMute() {
+  try {
+    return window.localStorage.getItem(musicStorageKey) === "true";
+  } catch {
+    return false;
+  }
+}
+
+function storeMusicMute(muted) {
+  try {
+    window.localStorage.setItem(musicStorageKey, String(muted));
+  } catch {
+    // Storage can be unavailable in private or embedded contexts.
+  }
+}
+
+function setMusicMuted(muted) {
+  music.muted = muted;
+  music.audio.muted = muted;
+  muteToggle.classList.toggle("is-muted", muted);
+  muteToggle.setAttribute("aria-pressed", String(muted));
+  muteToggle.setAttribute("aria-label", muted ? "Unmute music" : "Mute music");
+  muteToggle.title = muted ? "Unmute music" : "Mute music";
+  storeMusicMute(muted);
+
+  if (muted) {
+    music.audio.pause();
+  }
+}
+
+function playMusic() {
+  if (music.muted) return;
+  music.unlocked = true;
+  music.audio.play().catch(() => {
+    music.unlocked = false;
+  });
+}
+
+function unlockMusic() {
+  if (music.unlocked || music.muted) return;
+  playMusic();
+}
+
+function toggleMusicMute() {
+  setMusicMuted(!music.muted);
+  if (!music.muted) {
+    playMusic();
+  }
+}
+
+function advanceMusicTrack() {
+  music.index = (music.index + 1) % music.tracks.length;
+  music.audio.src = music.tracks[music.index];
+  playMusic();
+}
+
+function updateLoadingProgress(loaded, total) {
+  const percent = total ? Math.round((loaded / total) * 100) : 100;
+  loadingText.textContent = `Loading ${percent}%`;
+  loadingBar.style.width = `${percent}%`;
+}
+
+function finishLoadingProgress() {
+  loadingText.textContent = "Ready";
+  loadingBar.style.width = "100%";
+  loadingOverlay.classList.add("is-done");
+  window.setTimeout(() => {
+    loadingOverlay.hidden = true;
+  }, 360);
+}
+
+function showLoadingError() {
+  loadingText.textContent = "Loading failed";
+  loadingBar.style.width = "100%";
+}
+
 function loadImage(src) {
   const image = new Image();
   image.src = src;
@@ -146,6 +255,9 @@ function loadLayer(src, options = {}) {
     alignY: options.alignY ?? "bottom",
     groundAnchorRatio: options.groundAnchorRatio ?? 0.68,
     overlapRatio: options.overlapRatio ?? 0,
+    targetHeightRatio: options.targetHeightRatio ?? null,
+    minTileWidthRatio: options.minTileWidthRatio ?? 1,
+    opacity: options.opacity ?? 1,
   };
 }
 
@@ -214,6 +326,9 @@ function createPiggyback() {
     state: "off",
     transitionStartedAt: 0,
     transitionDuration: 0,
+    turnFrom: 1,
+    turnTo: 1,
+    pendingTurnFacing: 0,
     locomotionLastAxis: 0,
     history: [],
   };
@@ -457,7 +572,7 @@ function isPiggybackVisible() {
 }
 
 function isPiggybackMounted() {
-  return ["idle", "start", "run", "stop"].includes(piggyback.state);
+  return ["idle", "start", "run", "stop", "turn"].includes(piggyback.state);
 }
 
 function canStartPiggybackMount() {
@@ -562,6 +677,9 @@ function startPiggybackMount(facingOverride = null) {
   piggyback.grounded = true;
   piggyback.facing = facing;
   piggyback.visualFacing = facing;
+  piggyback.turnFrom = facing;
+  piggyback.turnTo = facing;
+  piggyback.pendingTurnFacing = 0;
   piggyback.locomotionLastAxis = 0;
   piggyback.history = [];
   resetCharacterMotion(daniel, facing);
@@ -576,6 +694,7 @@ function startPiggybackDismount() {
   piggyback.vy = 0;
   piggyback.y = groundY;
   piggyback.grounded = true;
+  piggyback.pendingTurnFacing = 0;
   piggyback.locomotionLastAxis = 0;
 }
 
@@ -603,6 +722,9 @@ function updatePiggyback(dt, rewinding) {
     piggyback.facing = past.facing;
     piggyback.visualFacing = past.visualFacing ?? past.facing;
     piggyback.state = past.state;
+    piggyback.turnFrom = past.turnFrom ?? past.facing;
+    piggyback.turnTo = past.turnTo ?? past.facing;
+    piggyback.pendingTurnFacing = past.pendingTurnFacing ?? 0;
     piggyback.locomotionLastAxis = 0;
     syncCharactersToPiggyback();
     return;
@@ -625,19 +747,27 @@ function updatePiggyback(dt, rewinding) {
   }
 
   const axis = movementAxis(daniel);
+  const inputFacing = axis === 0 ? 0 : axis > 0 ? 1 : -1;
+
+  if (inputFacing !== 0 && inputFacing !== piggyback.facing) {
+    requestPiggybackTurn(inputFacing);
+  }
+
+  const turningOrPreparing = piggyback.state === "turn" || piggyback.pendingTurnFacing !== 0;
   if (axis !== 0) {
-    const nextFacing = axis > 0 ? 1 : -1;
-    piggyback.facing = nextFacing;
-    piggyback.visualFacing = nextFacing;
-    if (piggyback.locomotionLastAxis === 0 && piggyback.state !== "start") {
-      startPiggybackLocomotion("start", 0.34);
+    if (!turningOrPreparing) {
+      piggyback.facing = inputFacing;
+      piggyback.visualFacing = inputFacing;
+      if (piggyback.locomotionLastAxis === 0 && piggyback.state !== "start") {
+        startPiggybackLocomotion("start", 0.34);
+      }
+      piggyback.vx += axis * physics.acceleration * 1.28 * dt;
     }
-    piggyback.vx += axis * physics.acceleration * 1.28 * dt;
-  } else if (piggyback.locomotionLastAxis !== 0 && Math.abs(piggyback.vx) > 58 && piggyback.state !== "stop") {
+  } else if (!turningOrPreparing && piggyback.locomotionLastAxis !== 0 && Math.abs(piggyback.vx) > 58 && piggyback.state !== "stop") {
     startPiggybackLocomotion("stop", 0.48);
   }
 
-  const friction = axis === 0 ? 0.82 : 0.94;
+  const friction = axis === 0 || turningOrPreparing ? 0.78 : 0.94;
   piggyback.vx *= Math.pow(friction, dt * 60);
   const maxSpeed = physics.maxSpeed * 1.48;
   piggyback.vx = Math.max(-maxSpeed, Math.min(maxSpeed, piggyback.vx));
@@ -666,7 +796,45 @@ function startPiggybackLocomotion(state, duration) {
   piggyback.transitionDuration = duration;
 }
 
+function requestPiggybackTurn(nextFacing) {
+  if (piggyback.state === "turn" || piggyback.pendingTurnFacing === nextFacing) return;
+
+  piggyback.pendingTurnFacing = nextFacing;
+  const needsBraking = Math.abs(piggyback.vx) > 72 || piggyback.state === "run" || piggyback.state === "start";
+  if (needsBraking) {
+    startPiggybackLocomotion("stop", 0.22);
+    return;
+  }
+
+  startPiggybackTurn(nextFacing);
+}
+
+function startPiggybackTurn(nextFacing) {
+  const from = piggyback.visualFacing || piggyback.facing || 1;
+  piggyback.state = "turn";
+  piggyback.turnFrom = from;
+  piggyback.turnTo = nextFacing;
+  piggyback.facing = nextFacing;
+  piggyback.visualFacing = from;
+  piggyback.pendingTurnFacing = 0;
+  piggyback.transitionStartedAt = elapsed;
+  piggyback.transitionDuration = 0.4;
+}
+
+function finishPiggybackTurn(axis) {
+  piggyback.facing = piggyback.turnTo;
+  piggyback.visualFacing = piggyback.turnTo;
+  piggyback.state = axis === piggyback.turnTo ? "start" : "idle";
+  piggyback.transitionStartedAt = elapsed;
+  piggyback.transitionDuration = piggyback.state === "start" ? 0.24 : 0;
+}
+
 function updatePiggybackLocomotion(axis) {
+  if (piggyback.state === "turn" && elapsed - piggyback.transitionStartedAt >= piggyback.transitionDuration) {
+    finishPiggybackTurn(axis);
+    return;
+  }
+
   if (piggyback.state === "start" && elapsed - piggyback.transitionStartedAt >= piggyback.transitionDuration) {
     piggyback.state = axis === 0 ? "stop" : "run";
     piggyback.transitionStartedAt = elapsed;
@@ -674,6 +842,11 @@ function updatePiggybackLocomotion(axis) {
   }
 
   if (piggyback.state === "stop" && elapsed - piggyback.transitionStartedAt >= piggyback.transitionDuration) {
+    if (piggyback.pendingTurnFacing !== 0) {
+      startPiggybackTurn(piggyback.pendingTurnFacing);
+      return;
+    }
+
     piggyback.state = axis === 0 || Math.abs(piggyback.vx) < 34 ? "idle" : "run";
   }
 
@@ -721,6 +894,9 @@ function recordPiggybackHistory(dt) {
     facing: piggyback.facing,
     visualFacing: piggyback.visualFacing,
     state: piggyback.state,
+    turnFrom: piggyback.turnFrom,
+    turnTo: piggyback.turnTo,
+    pendingTurnFacing: piggyback.pendingTurnFacing,
   });
   const maxHistory = Math.round(5 / Math.max(dt, 1 / 120));
   if (piggyback.history.length > maxHistory) {
@@ -862,9 +1038,12 @@ function drawTiledLayer(layer) {
   const stepX = drawW * (1 - layer.overlapRatio);
   const offsetX = -positiveModulo(camera.x * layer.parallax * zoom, stepX);
 
+  ctx.save();
+  ctx.globalAlpha = layer.opacity;
   for (let x = offsetX - drawW; x < width + drawW; x += stepX) {
     ctx.drawImage(image, x, drawY, drawW, drawH);
   }
+  ctx.restore();
 }
 
 function layerZoom(layer) {
@@ -873,6 +1052,12 @@ function layerZoom(layer) {
 
 function layerScale(layer) {
   const image = layer.image;
+  if (layer.targetHeightRatio) {
+    const heightScale = (height * layer.targetHeightRatio) / image.naturalHeight;
+    const widthScale = (width * layer.minTileWidthRatio) / image.naturalWidth;
+    return Math.max(heightScale, widthScale);
+  }
+
   if (layer.alignY !== "ground") {
     return Math.max(width / image.naturalWidth, height / image.naturalHeight);
   }
@@ -1024,6 +1209,14 @@ function selectPiggybackFrame(t) {
       sheet: piggyback.sheets.stop,
       index: transitionFrameIndex(piggyback.sheets.stop),
       facing: piggyback.visualFacing,
+    };
+  }
+
+  if (piggyback.state === "turn") {
+    return {
+      sheet: piggyback.sheets.turn,
+      index: transitionFrameIndex(piggyback.sheets.turn),
+      facing: piggyback.turnFrom === 1 ? 1 : -1,
     };
   }
 
@@ -1208,6 +1401,7 @@ function resetInput() {
     character.jump.wasHeld = false;
   });
   piggyback.locomotionLastAxis = 0;
+  piggyback.pendingTurnFacing = 0;
 }
 
 window.addEventListener("resize", resize);
@@ -1217,9 +1411,14 @@ document.addEventListener("visibilitychange", () => {
 });
 
 window.addEventListener("keydown", (event) => {
-  if (["ArrowLeft", "ArrowRight", "ArrowUp", "Space", "ShiftLeft", "ShiftRight", "KeyA", "KeyD", "KeyW", "KeyS", "KeyR"].includes(event.code)) {
+  if (["ArrowLeft", "ArrowRight", "ArrowUp", "Space", "ShiftLeft", "ShiftRight", "KeyA", "KeyD", "KeyW", "KeyS", "KeyR", "KeyM"].includes(event.code)) {
     event.preventDefault();
   }
+  if (event.code === "KeyM" && !event.repeat) {
+    toggleMusicMute();
+    return;
+  }
+  unlockMusic();
   if (event.code === "KeyS" && !event.repeat) {
     tryTogglePiggyback();
   }
@@ -1236,6 +1435,7 @@ window.addEventListener("keyup", (event) => {
 });
 
 canvas.addEventListener("pointerdown", (event) => {
+  unlockMusic();
   canvas.focus();
   input.pointerDown = true;
   updatePointer(event);
@@ -1255,19 +1455,36 @@ canvas.addEventListener("pointercancel", () => {
   resetInput();
 });
 
+muteToggle.addEventListener("click", () => {
+  toggleMusicMute();
+  canvas.focus();
+});
+
+music.audio.addEventListener("ended", advanceMusicTrack);
+setMusicMuted(music.muted);
+
 const characterSheets = [...characters.flatMap((character) => Object.values(character.sheets)), ...Object.values(piggybackSheets)];
 const characterImages = characters.flatMap((character) => Object.values(character.legacyBackTurn ?? {}));
 const layerImages = Object.values(sceneLayers).flat().map((layer) => layer.image);
+const runtimeImages = [...characterSheets.map((sheet) => sheet.image), ...characterImages, ...layerImages];
+let loadedImages = 0;
 
 Promise.all(
-  [...characterSheets.map((sheet) => sheet.image), ...characterImages, ...layerImages].map(
+  runtimeImages.map(
     (image) =>
       new Promise((resolve, reject) => {
-        if (image.complete && image.naturalWidth) {
+        const done = () => {
+          loadedImages += 1;
+          updateLoadingProgress(loadedImages, runtimeImages.length);
           resolve();
+        };
+
+        if (image.complete && image.naturalWidth) {
+          done();
           return;
         }
-        image.addEventListener("load", resolve, { once: true });
+
+        image.addEventListener("load", done, { once: true });
         image.addEventListener("error", reject, { once: true });
       }),
   ),
@@ -1275,5 +1492,9 @@ Promise.all(
   characterSheets.forEach(buildSheetFrameBounds);
   resize();
   canvas.focus();
+  finishLoadingProgress();
   requestAnimationFrame(frame);
+}).catch((error) => {
+  showLoadingError();
+  throw error;
 });
