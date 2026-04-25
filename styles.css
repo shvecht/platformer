@@ -1,0 +1,30 @@
+:root {
+  color-scheme: light;
+  background: #eadfbb;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+}
+
+body {
+  background: #eadfbb;
+  font-family: ui-serif, Georgia, "Times New Roman", serif;
+}
+
+#game {
+  display: block;
+  width: 100vw;
+  height: 100vh;
+  background: #eadfbb;
+  touch-action: none;
+  outline: none;
+}
