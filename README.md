@@ -17,6 +17,7 @@ Open <http://127.0.0.1:8765/>.
 - Daniel: left/right arrows to move; Space or up arrow to jump
 - Girl: A/D to move; W to jump
 - Girl near Daniel: S to hop on for a piggyback ride; S again to hop off
+- Piggyback ride: left/right arrows to run; Space or up arrow to jump; release and hold Space again while airborne to fly; while holding Space, use up/down arrows to climb or descend
 - Shift or R: rewind recent movement
 - M or the speaker button: mute/unmute background music
 - Touch/drag left or right side: move; center touch: jump
@@ -44,9 +45,9 @@ Runtime image files use WebP copies for faster loading. The original PNG assets 
 - `assets/daniel-jump-sheet.png` is the newer 6x6 jump sheet.
 - `assets/daniel-stop-sheet.png` is the newer 5x5 stopping sheet, also played in reverse for starting to walk.
 - `assets/girl-*.png` are the second character sheets for idle, walking, turning, jumping, and stopping.
-- `assets/piggyback-*.png` are the combined Daniel-and-girl sheets for mounting, dismounting, idle, turning, start-run, stop-run, and running.
+- `assets/piggyback-*.png` are the combined Daniel-and-girl sheets for mounting, dismounting, idle, turning, start-run, stop-run, running, jumping, starting flight, flying, fly-turning, and landing.
 - `assets/layers/front-foreground-faded.png` is the low-opacity plant silhouette layer drawn in front of the characters.
 - `assets/audio/braided-path*.mp3` are the background music tracks.
 - `tools/extract_daniel.py` regenerates the cutouts from the sheet.
 
-The current character animation uses the newer sprite sheets: mirrored stepping-in-place while idle, stop-sheet reverse when starting to walk, the walking sheet while moving, the stop sheet when releasing movement, the jump sheet while airborne and landing, and the turn sheet when changing direction. The front-facing 180-degree turn uses the new turn sheet; the optional back-facing turn still uses the earlier back-view cutouts because the newer sheets do not include a back view.
+The current character animation uses the newer sprite sheets: mirrored stepping-in-place while idle, stop-sheet reverse when starting to walk, the walking sheet while moving, the stop sheet when releasing movement, the jump sheet while airborne and landing, and the turn sheet when changing direction. Piggyback mode adds a combined jump, hold-to-fly transition, flying loop, and landing animation. The front-facing 180-degree turn uses the new turn sheet; the optional back-facing turn still uses the earlier back-view cutouts because the newer sheets do not include a back view.

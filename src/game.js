@@ -37,6 +37,19 @@ const piggybackSheets = {
   stop: loadSheet("assets/piggyback-stop-run-sheet.webp", 6, 6, 20),
   turn: loadSheet("assets/piggyback-turn-sheet.webp", 6, 6, 22),
   run: loadSheet("assets/piggyback-run-sheet.webp", 6, 6, 18),
+  jump: loadSheet("assets/piggyback-jump-sheet.webp", 6, 6, 18),
+  startFlying: loadSheet("assets/piggyback-start-flying-sheet.webp", 6, 6, 20, {
+    referenceFrames: [...Array(18).keys()],
+  }),
+  flying: loadSheet("assets/piggyback-flying-sheet.webp", 6, 6, 18, {
+    referenceHeight: 554,
+  }),
+  flyTurn: loadSheet("assets/piggyback-fly-turn-sheet.webp", 6, 6, 20, {
+    referenceHeight: 554,
+  }),
+  landing: loadSheet("assets/piggyback-landing-sheet.webp", 6, 6, 20, {
+    referenceFrames: Array.from({ length: 24 }, (_, index) => index + 12),
+  }),
 };
 
 const legacyBackTurn = {
@@ -49,13 +62,16 @@ const sceneLayers = {
     loadLayer("assets/layers/far-sky-pattern.webp", {
       parallax: 0.08,
       alignY: "bottom",
+      overlapRatio: 0.14,
+      featherRatio: 0.14,
     }),
   ],
   midBackground: [
     loadLayer("assets/layers/mid-landscape-faded.webp", {
       parallax: 0.18,
       alignY: "bottom",
-      overlapRatio: 0.06,
+      overlapRatio: 0.13,
+      featherRatio: 0.13,
     }),
   ],
   foreground: [
@@ -255,6 +271,7 @@ function loadLayer(src, options = {}) {
     alignY: options.alignY ?? "bottom",
     groundAnchorRatio: options.groundAnchorRatio ?? 0.68,
     overlapRatio: options.overlapRatio ?? 0,
+    featherRatio: options.featherRatio ?? 0,
     targetHeightRatio: options.targetHeightRatio ?? null,
     minTileWidthRatio: options.minTileWidthRatio ?? 1,
     opacity: options.opacity ?? 1,
@@ -270,6 +287,7 @@ function loadSheet(src, cols, rows, fps, options = {}) {
     frameBounds: [],
     referenceHeight: 1,
     referenceFrames: options.referenceFrames ?? null,
+    referenceHeightOverride: options.referenceHeight ?? null,
   };
 }
 
@@ -330,6 +348,13 @@ function createPiggyback() {
     turnTo: 1,
     pendingTurnFacing: 0,
     locomotionLastAxis: 0,
+    flight: {
+      jumpQueued: false,
+      jumpWasHeld: false,
+      canStartFlight: false,
+      startedAt: -Infinity,
+      landingStartedAt: -Infinity,
+    },
     history: [],
   };
 }
@@ -397,9 +422,13 @@ function buildSheetFrameBounds(sheet) {
     frameHeights.push(sourceH);
   }
 
-  const referenceFrames = sheet.referenceFrames ?? frameHeights.map((_, index) => index);
-  const referenceHeights = referenceFrames.map((index) => frameHeights[index]).filter(Boolean);
-  sheet.referenceHeight = median(referenceHeights.length ? referenceHeights : frameHeights);
+  if (sheet.referenceHeightOverride) {
+    sheet.referenceHeight = sheet.referenceHeightOverride;
+  } else {
+    const referenceFrames = sheet.referenceFrames ?? frameHeights.map((_, index) => index);
+    const referenceHeights = referenceFrames.map((index) => frameHeights[index]).filter(Boolean);
+    sheet.referenceHeight = median(referenceHeights.length ? referenceHeights : frameHeights);
+  }
 }
 
 function resize() {
@@ -412,7 +441,7 @@ function resize() {
   canvas.style.height = `${height}px`;
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
-  groundY = Math.round(height * 0.79);
+  groundY = Math.round(height * 0.815);
 
   if (!initialized) {
     characters.forEach((character) => {
@@ -463,6 +492,17 @@ function wantsJump(character) {
   const keyboardJump = hasAnyKey(character.controls.jump);
   const pointerJump = character.controls.pointer && input.pointerDown && input.pointerX > width * 0.38 && input.pointerX < width * 0.62;
   return keyboardJump || pointerJump;
+}
+
+function wantsPiggybackFlightThrottle() {
+  return hasKey("Space");
+}
+
+function piggybackFlightVerticalAxis() {
+  let axis = 0;
+  if (hasKey("ArrowUp")) axis -= 1;
+  if (hasKey("ArrowDown")) axis += 1;
+  return axis;
 }
 
 function wantsRewind() {
@@ -572,7 +612,7 @@ function isPiggybackVisible() {
 }
 
 function isPiggybackMounted() {
-  return ["idle", "start", "run", "stop", "turn"].includes(piggyback.state);
+  return ["idle", "start", "run", "stop", "turn", "jump", "startFlying", "flying", "flyTurn", "landing"].includes(piggyback.state);
 }
 
 function canStartPiggybackMount() {
@@ -681,6 +721,11 @@ function startPiggybackMount(facingOverride = null) {
   piggyback.turnTo = facing;
   piggyback.pendingTurnFacing = 0;
   piggyback.locomotionLastAxis = 0;
+  piggyback.flight.jumpQueued = false;
+  piggyback.flight.jumpWasHeld = false;
+  piggyback.flight.canStartFlight = false;
+  piggyback.flight.startedAt = -Infinity;
+  piggyback.flight.landingStartedAt = -Infinity;
   piggyback.history = [];
   resetCharacterMotion(daniel, facing);
   resetCharacterMotion(girl, facing);
@@ -696,6 +741,9 @@ function startPiggybackDismount() {
   piggyback.grounded = true;
   piggyback.pendingTurnFacing = 0;
   piggyback.locomotionLastAxis = 0;
+  piggyback.flight.jumpQueued = false;
+  piggyback.flight.jumpWasHeld = false;
+  piggyback.flight.canStartFlight = false;
 }
 
 function resetCharacterMotion(character, facing) {
@@ -719,6 +767,7 @@ function updatePiggyback(dt, rewinding) {
     piggyback.y = past.y;
     piggyback.vx = past.vx * 0.35;
     piggyback.vy = past.vy * 0.35;
+    piggyback.grounded = past.grounded;
     piggyback.facing = past.facing;
     piggyback.visualFacing = past.visualFacing ?? past.facing;
     piggyback.state = past.state;
@@ -726,6 +775,8 @@ function updatePiggyback(dt, rewinding) {
     piggyback.turnTo = past.turnTo ?? past.facing;
     piggyback.pendingTurnFacing = past.pendingTurnFacing ?? 0;
     piggyback.locomotionLastAxis = 0;
+    piggyback.flight.jumpWasHeld = true;
+    piggyback.flight.canStartFlight = past.canStartFlight ?? false;
     syncCharactersToPiggyback();
     return;
   }
@@ -748,38 +799,97 @@ function updatePiggyback(dt, rewinding) {
 
   const axis = movementAxis(daniel);
   const inputFacing = axis === 0 ? 0 : axis > 0 ? 1 : -1;
+  const jumpHeld = wantsJump(daniel);
+  const flightHeld = wantsPiggybackFlightThrottle();
+  const jumpPressed = piggyback.flight.jumpQueued || (jumpHeld && !piggyback.flight.jumpWasHeld);
+  const wasGrounded = piggyback.grounded;
 
-  if (inputFacing !== 0 && inputFacing !== piggyback.facing) {
-    requestPiggybackTurn(inputFacing);
+  if (!piggyback.grounded && !flightHeld) {
+    piggyback.flight.canStartFlight = true;
   }
 
-  const turningOrPreparing = piggyback.state === "turn" || piggyback.pendingTurnFacing !== 0;
-  if (axis !== 0) {
-    if (!turningOrPreparing) {
+  if (inputFacing !== 0 && inputFacing !== piggyback.facing) {
+    if (piggyback.grounded) {
+      requestPiggybackTurn(inputFacing);
+    } else if (isPiggybackFlyingState()) {
+      startPiggybackFlyTurn(inputFacing);
+    } else {
+      piggyback.turnFrom = inputFacing;
+      piggyback.turnTo = inputFacing;
+      piggyback.pendingTurnFacing = 0;
       piggyback.facing = inputFacing;
       piggyback.visualFacing = inputFacing;
-      if (piggyback.locomotionLastAxis === 0 && piggyback.state !== "start") {
+      if (piggyback.state === "turn") piggyback.state = "jump";
+    }
+  }
+
+  const turningOrPreparing = piggyback.grounded && (piggyback.state === "turn" || piggyback.pendingTurnFacing !== 0);
+  const flightTurning = piggyback.state === "flyTurn";
+  const inLandingLock = piggyback.state === "landing" && elapsed - piggyback.transitionStartedAt < piggyback.transitionDuration * 0.65;
+  if (jumpPressed && piggyback.grounded && !turningOrPreparing && !inLandingLock) {
+    startPiggybackJump(axis);
+  }
+
+  if (axis !== 0) {
+    if (!turningOrPreparing) {
+      if (!flightTurning) {
+        piggyback.facing = inputFacing;
+        piggyback.visualFacing = inputFacing;
+      }
+      if (piggyback.grounded && piggyback.locomotionLastAxis === 0 && piggyback.state !== "start" && piggyback.state !== "landing") {
         startPiggybackLocomotion("start", 0.34);
       }
       piggyback.vx += axis * physics.acceleration * 1.28 * dt;
     }
-  } else if (!turningOrPreparing && piggyback.locomotionLastAxis !== 0 && Math.abs(piggyback.vx) > 58 && piggyback.state !== "stop") {
+  } else if (piggyback.grounded && !turningOrPreparing && piggyback.locomotionLastAxis !== 0 && Math.abs(piggyback.vx) > 58 && piggyback.state !== "stop" && piggyback.state !== "landing") {
     startPiggybackLocomotion("stop", 0.48);
   }
 
-  const friction = axis === 0 || turningOrPreparing ? 0.78 : 0.94;
+  if (!piggyback.grounded && flightHeld && piggyback.flight.canStartFlight && piggyback.state === "jump" && elapsed - piggyback.flight.startedAt > 0.16 && piggyback.y < groundY - 44) {
+    startPiggybackFlight();
+  }
+
+  const friction = piggyback.grounded ? (axis === 0 || turningOrPreparing ? 0.78 : 0.94) : 0.988;
   piggyback.vx *= Math.pow(friction, dt * 60);
   const maxSpeed = physics.maxSpeed * 1.48;
   piggyback.vx = Math.max(-maxSpeed, Math.min(maxSpeed, piggyback.vx));
+
+  if (piggyback.grounded) {
+    piggyback.y = groundY;
+    piggyback.vy = 0;
+  } else {
+    applyPiggybackAirPhysics(dt, flightHeld);
+  }
+
   piggyback.x += piggyback.vx * dt;
-  piggyback.y = groundY;
-  piggyback.vy = 0;
-  piggyback.grounded = true;
+  piggyback.y += piggyback.vy * dt;
+
+  const landingStartDistance = Math.max(54, Math.min(86, currentSpriteHeight(piggyback) * 0.15));
+  if (!piggyback.grounded && piggyback.state !== "landing" && piggyback.vy > 120 && groundY - piggyback.y < landingStartDistance) {
+    startPiggybackLanding(false);
+  }
+
+  const flightCeiling = groundY - Math.max(180, height * 0.58);
+  if (!piggyback.grounded && piggyback.y < flightCeiling) {
+    piggyback.y = flightCeiling;
+    piggyback.vy = Math.max(0, piggyback.vy);
+  }
+
+  if (piggyback.y >= groundY) {
+    piggyback.y = groundY;
+    piggyback.vy = 0;
+    piggyback.grounded = true;
+    if (!wasGrounded) {
+      startPiggybackLanding(true);
+    }
+  }
 
   updatePiggybackLocomotion(axis);
   syncCharactersToPiggyback();
   recordPiggybackHistory(dt);
   piggyback.locomotionLastAxis = axis;
+  piggyback.flight.jumpQueued = false;
+  piggyback.flight.jumpWasHeld = jumpHeld;
 }
 
 function updatePiggybackTransition(nextState) {
@@ -794,6 +904,77 @@ function startPiggybackLocomotion(state, duration) {
   piggyback.state = state;
   piggyback.transitionStartedAt = elapsed;
   piggyback.transitionDuration = duration;
+}
+
+function startPiggybackJump(axis) {
+  piggyback.state = "jump";
+  piggyback.transitionStartedAt = elapsed;
+  piggyback.transitionDuration = 0;
+  piggyback.flight.startedAt = elapsed;
+  piggyback.flight.landingStartedAt = -Infinity;
+  piggyback.flight.canStartFlight = false;
+  piggyback.grounded = false;
+  piggyback.vy = physics.jumpVelocity * 1.05;
+  piggyback.pendingTurnFacing = 0;
+  if (axis !== 0) {
+    piggyback.facing = axis > 0 ? 1 : -1;
+    piggyback.visualFacing = piggyback.facing;
+  }
+}
+
+function startPiggybackFlight() {
+  if (piggyback.state === "startFlying" || piggyback.state === "flying") return;
+  piggyback.state = "startFlying";
+  piggyback.transitionStartedAt = elapsed;
+  piggyback.transitionDuration = 0.64;
+}
+
+function startPiggybackFlyTurn(nextFacing) {
+  if (piggyback.state === "flyTurn" || nextFacing === piggyback.visualFacing) return;
+  piggyback.state = "flyTurn";
+  piggyback.turnFrom = piggyback.visualFacing || piggyback.facing || 1;
+  piggyback.turnTo = nextFacing;
+  piggyback.facing = nextFacing;
+  piggyback.transitionStartedAt = elapsed;
+  piggyback.transitionDuration = 0.58;
+}
+
+function startPiggybackLanding(onGround) {
+  if (piggyback.state === "landing" && (!onGround || piggyback.grounded)) return;
+  piggyback.state = "landing";
+  piggyback.transitionStartedAt = elapsed;
+  piggyback.transitionDuration = onGround ? 0.48 : 0.62;
+  piggyback.flight.landingStartedAt = elapsed;
+}
+
+function applyPiggybackAirPhysics(dt, flightHeld) {
+  const flying = isPiggybackFlyingState();
+  if (piggyback.state === "landing") {
+    piggyback.vy += physics.gravity * 0.35 * dt;
+    piggyback.vy = Math.min(420, piggyback.vy);
+    return;
+  }
+
+  if (flying && flightHeld) {
+    const verticalAxis = piggybackFlightVerticalAxis();
+    const targetVy = verticalAxis < 0 ? -330 : verticalAxis > 0 ? 310 : 16;
+    const response = verticalAxis === 0 ? 4.8 : 7.8;
+    const blend = 1 - Math.pow(0.001, dt * response);
+    piggyback.vy += (targetVy - piggyback.vy) * blend;
+    piggyback.vy = Math.max(-360, Math.min(330, piggyback.vy));
+    return;
+  }
+
+  if (flying && !flightHeld) {
+    piggyback.state = "jump";
+  }
+
+  piggyback.vy += physics.gravity * 0.92 * dt;
+  piggyback.vy = Math.min(720, piggyback.vy);
+}
+
+function isPiggybackFlyingState() {
+  return piggyback.state === "startFlying" || piggyback.state === "flying" || piggyback.state === "flyTurn";
 }
 
 function requestPiggybackTurn(nextFacing) {
@@ -830,6 +1011,30 @@ function finishPiggybackTurn(axis) {
 }
 
 function updatePiggybackLocomotion(axis) {
+  if (piggyback.state === "flyTurn" && elapsed - piggyback.transitionStartedAt >= piggyback.transitionDuration) {
+    piggyback.visualFacing = piggyback.turnTo;
+    piggyback.facing = piggyback.turnTo;
+    piggyback.state = "flying";
+    piggyback.transitionStartedAt = elapsed;
+    piggyback.transitionDuration = 0;
+  }
+
+  if (piggyback.state === "startFlying" && elapsed - piggyback.transitionStartedAt >= piggyback.transitionDuration) {
+    piggyback.state = "flying";
+    piggyback.transitionStartedAt = elapsed;
+    piggyback.transitionDuration = 0;
+  }
+
+  if (!piggyback.grounded) return;
+
+  if (piggyback.state === "landing") {
+    if (elapsed - piggyback.transitionStartedAt < piggyback.transitionDuration) return;
+    piggyback.state = axis === 0 || Math.abs(piggyback.vx) < 34 ? "idle" : "run";
+    piggyback.transitionStartedAt = elapsed;
+    piggyback.transitionDuration = 0;
+    return;
+  }
+
   if (piggyback.state === "turn" && elapsed - piggyback.transitionStartedAt >= piggyback.transitionDuration) {
     finishPiggybackTurn(axis);
     return;
@@ -859,16 +1064,16 @@ function syncCharactersToPiggyback() {
   daniel.x = piggyback.x;
   daniel.y = piggyback.y;
   daniel.vx = piggyback.vx;
-  daniel.vy = 0;
-  daniel.grounded = true;
+  daniel.vy = piggyback.vy;
+  daniel.grounded = piggyback.grounded;
   daniel.facing = piggyback.facing;
   daniel.visualFacing = piggyback.visualFacing;
 
   girl.x = piggyback.x - piggyback.visualFacing * 42;
   girl.y = piggyback.y;
   girl.vx = piggyback.vx;
-  girl.vy = 0;
-  girl.grounded = true;
+  girl.vy = piggyback.vy;
+  girl.grounded = piggyback.grounded;
   girl.facing = piggyback.facing;
   girl.visualFacing = piggyback.visualFacing;
 }
@@ -883,6 +1088,9 @@ function finishPiggybackDismount() {
   girl.y = groundY;
   piggyback.vx = 0;
   piggyback.history = [];
+  piggyback.flight.jumpQueued = false;
+  piggyback.flight.jumpWasHeld = false;
+  piggyback.flight.canStartFlight = false;
 }
 
 function recordPiggybackHistory(dt) {
@@ -897,6 +1105,8 @@ function recordPiggybackHistory(dt) {
     turnFrom: piggyback.turnFrom,
     turnTo: piggyback.turnTo,
     pendingTurnFacing: piggyback.pendingTurnFacing,
+    grounded: piggyback.grounded,
+    canStartFlight: piggyback.flight.canStartFlight,
   });
   const maxHistory = Math.round(5 / Math.max(dt, 1 / 120));
   if (piggyback.history.length > maxHistory) {
@@ -1039,11 +1249,49 @@ function drawTiledLayer(layer) {
   const offsetX = -positiveModulo(camera.x * layer.parallax * zoom, stepX);
 
   ctx.save();
-  ctx.globalAlpha = layer.opacity;
   for (let x = offsetX - drawW; x < width + drawW; x += stepX) {
-    ctx.drawImage(image, x, drawY, drawW, drawH);
+    drawLayerTile(layer, image, x, drawY, drawW, drawH);
   }
   ctx.restore();
+}
+
+function drawLayerTile(layer, image, x, y, drawW, drawH) {
+  const featherW = Math.min(drawW * 0.24, Math.max(0, drawW * layer.featherRatio));
+  if (featherW < 1) {
+    ctx.globalAlpha = layer.opacity;
+    ctx.drawImage(image, x, y, drawW, drawH);
+    return;
+  }
+
+  const featheredTile = getFeatheredLayerTile(layer, image, drawW, drawH, featherW);
+  ctx.globalAlpha = layer.opacity;
+  ctx.drawImage(featheredTile, x, y, drawW, drawH);
+}
+
+function getFeatheredLayerTile(layer, image, drawW, drawH, featherW) {
+  const cacheW = Math.max(1, Math.ceil(drawW));
+  const cacheH = Math.max(1, Math.ceil(drawH));
+  const cacheFeatherW = Math.max(1, Math.round(featherW));
+  const key = `${image.currentSrc || image.src}:${cacheW}:${cacheH}:${cacheFeatherW}`;
+  if (layer.featherCache?.key === key) return layer.featherCache.canvas;
+
+  const canvas = document.createElement("canvas");
+  canvas.width = cacheW;
+  canvas.height = cacheH;
+  const tileCtx = canvas.getContext("2d");
+  tileCtx.drawImage(image, 0, 0, cacheW, cacheH);
+  tileCtx.globalCompositeOperation = "destination-in";
+
+  const mask = tileCtx.createLinearGradient(0, 0, cacheW, 0);
+  mask.addColorStop(0, "rgba(0, 0, 0, 0)");
+  mask.addColorStop(Math.min(0.49, cacheFeatherW / cacheW), "rgba(0, 0, 0, 1)");
+  mask.addColorStop(Math.max(0.51, 1 - cacheFeatherW / cacheW), "rgba(0, 0, 0, 1)");
+  mask.addColorStop(1, "rgba(0, 0, 0, 0)");
+  tileCtx.fillStyle = mask;
+  tileCtx.fillRect(0, 0, cacheW, cacheH);
+
+  layer.featherCache = { key, canvas };
+  return canvas;
 }
 
 function layerZoom(layer) {
@@ -1096,6 +1344,7 @@ function drawPose(actor, pose, x, feetY, t, options = {}) {
   const isJumpPose = pose.sheet && actor.sheets.jump && pose.sheet === actor.sheets.jump;
   const bob = ghost || actor.turn?.active || isJumpPose || actor.kind === "piggyback" ? 0 : Math.sin(t * 2.15 + 0.7) * 0.9;
   const lean = ghost || actor.kind === "piggyback" ? 0 : Math.max(-0.055, Math.min(0.055, actor.vx / physics.maxSpeed * 0.06));
+  const groundSink = ghost ? 0 : spriteGroundSink(actor);
   const originX = -drawW * 0.5;
   const originY = -drawH;
 
@@ -1112,7 +1361,7 @@ function drawPose(actor, pose, x, feetY, t, options = {}) {
   }
 
   ctx.save();
-  ctx.translate(x, feetY + bob);
+  ctx.translate(x, feetY + bob + groundSink);
   ctx.scale(options.facing ?? pose.facing, 1);
   ctx.rotate(lean);
   ctx.globalAlpha = alpha;
@@ -1120,6 +1369,12 @@ function drawPose(actor, pose, x, feetY, t, options = {}) {
   ctx.drawImage(image, source.x, source.y, source.w, source.h, originX, originY, drawW, drawH);
 
   ctx.restore();
+}
+
+function spriteGroundSink(actor) {
+  if (!actor.grounded) return 0;
+  const ratio = actor.kind === "piggyback" ? 0.06 : 0.052;
+  return Math.round(currentSpriteHeight(actor) * ratio);
 }
 
 function frameSource(pose) {
@@ -1220,6 +1475,44 @@ function selectPiggybackFrame(t) {
     };
   }
 
+  if (piggyback.state === "jump") {
+    return selectPiggybackJumpFrame();
+  }
+
+  if (piggyback.state === "startFlying") {
+    const frames = Array.from({ length: 21 }, (_, index) => index + 15);
+    return {
+      sheet: piggyback.sheets.startFlying,
+      index: transitionFrameFromSequence(frames),
+      facing: piggyback.visualFacing,
+    };
+  }
+
+  if (piggyback.state === "flying") {
+    const sheet = piggyback.sheets.flying;
+    return {
+      sheet,
+      index: Math.floor(t * sheet.fps) % (sheet.cols * sheet.rows),
+      facing: piggyback.visualFacing,
+    };
+  }
+
+  if (piggyback.state === "flyTurn") {
+    return {
+      sheet: piggyback.sheets.flyTurn,
+      index: transitionFrameIndex(piggyback.sheets.flyTurn),
+      facing: piggyback.turnFrom === 1 ? 1 : -1,
+    };
+  }
+
+  if (piggyback.state === "landing") {
+    return {
+      sheet: piggyback.sheets.landing,
+      index: transitionFrameIndex(piggyback.sheets.landing),
+      facing: piggyback.visualFacing,
+    };
+  }
+
   const walking = piggyback.state === "run" || Math.abs(piggyback.vx) > 52;
   const sheet = walking ? piggyback.sheets.run : piggyback.sheets.idle;
   return {
@@ -1231,10 +1524,40 @@ function selectPiggybackFrame(t) {
 
 function transitionFrameIndex(sheet) {
   const frameCount = sheet.cols * sheet.rows;
+  return transitionFrameFromSequence(Array.from({ length: frameCount }, (_, index) => index));
+}
+
+function transitionFrameFromSequence(frames) {
   const raw = (elapsed - piggyback.transitionStartedAt) / Math.max(0.001, piggyback.transitionDuration);
   const progress = Math.max(0, Math.min(0.999, raw));
   const eased = progress < 0.5 ? 2 * progress * progress : 1 - Math.pow(-2 * progress + 2, 2) / 2;
-  return Math.min(frameCount - 1, Math.floor(eased * frameCount));
+  return frames[Math.min(frames.length - 1, Math.floor(eased * frames.length))];
+}
+
+function selectPiggybackJumpFrame() {
+  const age = elapsed - piggyback.flight.startedAt;
+  let index = 13;
+  if (age < 0.08) {
+    index = 8;
+  } else if (age < 0.16) {
+    index = 11;
+  } else if (piggyback.vy < -430) {
+    index = 14;
+  } else if (piggyback.vy < -170) {
+    index = 16;
+  } else if (piggyback.vy < 90) {
+    index = 18;
+  } else if (piggyback.vy < 360) {
+    index = 21;
+  } else {
+    index = 23;
+  }
+
+  return {
+    sheet: piggyback.sheets.jump,
+    index,
+    facing: piggyback.visualFacing,
+  };
 }
 
 function selectLocomotionFrame(character) {
@@ -1402,6 +1725,9 @@ function resetInput() {
   });
   piggyback.locomotionLastAxis = 0;
   piggyback.pendingTurnFacing = 0;
+  piggyback.flight.jumpQueued = false;
+  piggyback.flight.jumpWasHeld = false;
+  piggyback.flight.canStartFlight = false;
 }
 
 window.addEventListener("resize", resize);
@@ -1411,7 +1737,7 @@ document.addEventListener("visibilitychange", () => {
 });
 
 window.addEventListener("keydown", (event) => {
-  if (["ArrowLeft", "ArrowRight", "ArrowUp", "Space", "ShiftLeft", "ShiftRight", "KeyA", "KeyD", "KeyW", "KeyS", "KeyR", "KeyM"].includes(event.code)) {
+  if (["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Space", "ShiftLeft", "ShiftRight", "KeyA", "KeyD", "KeyW", "KeyS", "KeyR", "KeyM"].includes(event.code)) {
     event.preventDefault();
   }
   if (event.code === "KeyM" && !event.repeat) {
@@ -1427,6 +1753,9 @@ window.addEventListener("keydown", (event) => {
       character.jump.queued = true;
     }
   });
+  if (daniel.controls.jump.includes(event.code)) {
+    piggyback.flight.jumpQueued = true;
+  }
   keys.add(event.code);
 });
 
