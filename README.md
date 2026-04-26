@@ -1,12 +1,16 @@
-# Daniel Platformer
+# Browser Platformer Prototype
 
-Small browser platformer prototype for Daniel and Kerem, built as a static
-canvas app with hand-painted sprite sheets and layered parallax backgrounds.
+Small browser platformer prototype built as a static canvas app with sprite
+sheets, layered parallax backgrounds, and background music.
+
+## Generation Notice
+
+The art, music, and code in this repository were generated with assistance from
+large language models and related AI generation tools.
 
 ## Run
 
 ```bash
-cd /Users/isaacshochat/Documents/daniel-platformer
 python3 -m http.server 8765
 ```
 
@@ -14,15 +18,16 @@ Open <http://127.0.0.1:8765/>.
 
 ## Controls
 
-- Daniel: left/right arrows to move; Space or up arrow to jump
-- Girl: A/D to move; W to jump
-- Girl near Daniel: S to hop on for a piggyback ride; S again to hop off
+- Player 1: left/right arrows to move; Space or up arrow to jump
+- Player 2: A/D to move; W to jump
+- Player 2 near Player 1: S to hop on for a piggyback ride; S again to hop off
 - Piggyback ride: left/right arrows to run; Space or up arrow to jump; release and hold Space again while airborne to fly; while holding Space, use up/down arrows to climb or descend
 - Shift or R: rewind recent movement
 - M or the speaker button: mute/unmute background music
 - Touch/drag left or right side: move; center touch: jump
 
-The camera follows the midpoint between Daniel and Kerem, easing out up to 30% when they separate so both stay in frame for moderate splits.
+The camera follows the midpoint between the two players, easing out up to 30%
+when they separate so both stay in frame for moderate splits.
 
 ## Project Layout
 
@@ -36,18 +41,12 @@ Runtime image files use WebP copies for faster loading. The original PNG assets 
 
 ## Assets
 
-- `assets/daniel-idle-sheet.png` is the original supplied sheet.
-- `assets/daniel-idle-cutout.png` is the first extracted transparent model.
-- `assets/daniel-pose-*.png` are the lower-row pose cutouts used for direction changes.
-- `assets/daniel-step-sheet.png` is the newer 6x6 stepping-in-place sheet.
-- `assets/daniel-walk-sheet.png` is the newer 6x6 walking sheet.
-- `assets/daniel-turn-sheet.png` is the newer 6x6 front-facing turn sheet.
-- `assets/daniel-jump-sheet.png` is the newer 6x6 jump sheet.
-- `assets/daniel-stop-sheet.png` is the newer 5x5 stopping sheet, also played in reverse for starting to walk.
-- `assets/girl-*.png` are the second character sheets for idle, walking, turning, jumping, and stopping.
-- `assets/piggyback-*.png` are the combined Daniel-and-girl sheets for mounting, dismounting, idle, turning, start-run, stop-run, running, jumping, starting flight, flying, fly-turning, and landing.
-- `assets/layers/front-foreground-faded.png` is the low-opacity plant silhouette layer drawn in front of the characters.
-- `assets/audio/braided-path*.mp3` are the background music tracks.
-- `tools/extract_daniel.py` regenerates the cutouts from the sheet.
+- `assets/` contains generated character sheets, cutouts, parallax layers, and
+  background music.
+- Character sheets cover idle, walking, turning, jumping, stopping, mounting,
+  dismounting, running, flying, and landing animations.
+- `assets/layers/` contains background and foreground layers.
+- `assets/audio/` contains the generated background music tracks.
+- `tools/` contains one-off asset extraction helpers.
 
 The current character animation uses the newer sprite sheets: mirrored stepping-in-place while idle, stop-sheet reverse when starting to walk, the walking sheet while moving, the stop sheet when releasing movement, the jump sheet while airborne and landing, and the turn sheet when changing direction. Piggyback mode adds a combined jump, hold-to-fly transition, flying loop, and landing animation. The front-facing 180-degree turn uses the new turn sheet; the optional back-facing turn still uses the earlier back-view cutouts because the newer sheets do not include a back view.
