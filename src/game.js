@@ -1,6 +1,7 @@
 const canvas = document.getElementById("game");
 const ctx = canvas.getContext("2d", { alpha: false });
 const muteToggle = document.getElementById("mute-toggle");
+const fpsCounter = document.getElementById("fps-counter");
 const loadingOverlay = document.getElementById("loading-overlay");
 const loadingText = document.getElementById("loading-text");
 const loadingBar = document.getElementById("loading-bar");
@@ -61,15 +62,30 @@ const sceneLayers = {
   farBackground: [
     loadLayer("assets/layers/far-sky-pattern.webp", {
       parallax: 0.08,
-      alignY: "bottom",
+      alignY: "sky",
+      tileY: true,
+      verticalParallax: 0.1,
       overlapRatio: 0.14,
+      verticalOverlapRatio: 0.12,
       featherRatio: 0.14,
+    }),
+    loadLayer("assets/layers/far-sky-pattern.webp", {
+      parallax: 0.035,
+      alignY: "sky",
+      tileY: true,
+      verticalParallax: 0.24,
+      overlapRatio: 0.18,
+      verticalOverlapRatio: 0.2,
+      featherRatio: 0.18,
+      scaleMultiplier: 1.45,
+      opacity: 0.22,
     }),
   ],
   midBackground: [
     loadLayer("assets/layers/mid-landscape-faded.webp", {
       parallax: 0.18,
       alignY: "bottom",
+      verticalParallax: 0.24,
       overlapRatio: 0.13,
       featherRatio: 0.13,
     }),
@@ -102,6 +118,14 @@ const physics = {
   groundFriction: 0.84,
   airFriction: 0.985,
   jumpVelocity: -690,
+};
+
+const flightZone = {
+  heightScreens: 5.2,
+  minHeight: 1600,
+  minZoom: 0.58,
+  focusStartRatio: 0.44,
+  focusHighRatio: 0.36,
 };
 
 const characters = [
@@ -151,12 +175,20 @@ let initialized = false;
 
 const camera = {
   x: 0,
+  y: 0,
   zoom: 1,
 };
 
 const input = {
   pointerDown: false,
   pointerX: 0,
+};
+
+const fps = {
+  visible: true,
+  frames: 0,
+  elapsed: 0,
+  value: null,
 };
 
 const mountAssist = {
@@ -179,6 +211,13 @@ function createMusicController() {
     index: 0,
     muted: readStoredMusicMute(),
     unlocked: false,
+    audioContext: null,
+    source: null,
+    lowpass: null,
+    dryGain: null,
+    wetGain: null,
+    convolver: null,
+    audioGraphUnavailable: false,
   };
 }
 
@@ -214,6 +253,7 @@ function setMusicMuted(muted) {
 
 function playMusic() {
   if (music.muted) return;
+  resumeMusicAudioGraph();
   music.unlocked = true;
   music.audio.play().catch(() => {
     music.unlocked = false;
@@ -236,6 +276,121 @@ function advanceMusicTrack() {
   music.index = (music.index + 1) % music.tracks.length;
   music.audio.src = music.tracks[music.index];
   playMusic();
+}
+
+function setupMusicAudioGraph() {
+  if (music.audioContext || music.audioGraphUnavailable) return;
+
+  const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+  if (!AudioContextClass) {
+    music.audioGraphUnavailable = true;
+    return;
+  }
+
+  try {
+    const audioContext = new AudioContextClass();
+    const source = audioContext.createMediaElementSource(music.audio);
+    const lowpass = audioContext.createBiquadFilter();
+    const dryGain = audioContext.createGain();
+    const wetGain = audioContext.createGain();
+    const convolver = audioContext.createConvolver();
+
+    lowpass.type = "lowpass";
+    lowpass.frequency.value = 18000;
+    lowpass.Q.value = 0.45;
+    dryGain.gain.value = 1;
+    wetGain.gain.value = 0;
+    convolver.buffer = createFlightReverbImpulse(audioContext);
+
+    source.connect(lowpass);
+    lowpass.connect(dryGain);
+    lowpass.connect(convolver);
+    convolver.connect(wetGain);
+    dryGain.connect(audioContext.destination);
+    wetGain.connect(audioContext.destination);
+
+    music.audioContext = audioContext;
+    music.source = source;
+    music.lowpass = lowpass;
+    music.dryGain = dryGain;
+    music.wetGain = wetGain;
+    music.convolver = convolver;
+  } catch {
+    music.audioGraphUnavailable = true;
+  }
+}
+
+function resumeMusicAudioGraph() {
+  setupMusicAudioGraph();
+  if (music.audioContext?.state === "suspended") {
+    music.audioContext.resume().catch(() => {
+      music.audioGraphUnavailable = true;
+    });
+  }
+}
+
+function createFlightReverbImpulse(audioContext) {
+  const sampleRate = audioContext.sampleRate;
+  const length = Math.floor(sampleRate * 1.35);
+  const buffer = audioContext.createBuffer(2, length, sampleRate);
+
+  for (let channel = 0; channel < buffer.numberOfChannels; channel += 1) {
+    const data = buffer.getChannelData(channel);
+    for (let i = 0; i < length; i += 1) {
+      const progress = i / length;
+      const air = Math.pow(1 - progress, 2.4);
+      data[i] = (Math.random() * 2 - 1) * air * 0.42;
+    }
+  }
+
+  return buffer;
+}
+
+function updateMusicFlightEffect(dt) {
+  if (!music.audioContext || !music.lowpass || !music.dryGain || !music.wetGain) return;
+
+  const altitude = isPiggybackVisible() ? Math.max(0, groundY - piggyback.y) : 0;
+  const altitudeProgress = smoothstep(height * 0.45, height * 3.4, altitude);
+  const flyingReverb = isPiggybackFlyingState() ? 0.14 : 0;
+  const targetWet = Math.max(flyingReverb, altitudeProgress * 0.36);
+  const targetDry = lerp(1, 0.72, altitudeProgress);
+  const targetFrequency = lerp(18000, 4300, altitudeProgress);
+  const now = music.audioContext.currentTime;
+  const response = Math.max(0.08, Math.min(0.22, dt * 6));
+
+  music.lowpass.frequency.setTargetAtTime(targetFrequency, now, response);
+  music.dryGain.gain.setTargetAtTime(targetDry, now, response);
+  music.wetGain.gain.setTargetAtTime(targetWet, now, response);
+}
+
+function setFpsCounterVisible(visible) {
+  fps.visible = visible;
+  fpsCounter.hidden = !visible;
+  fpsCounter.setAttribute("aria-hidden", String(!visible));
+  if (visible) {
+    fpsCounter.textContent = fps.value === null ? "FPS --" : `FPS ${fps.value}`;
+  }
+}
+
+function toggleFpsCounter() {
+  setFpsCounterVisible(!fps.visible);
+}
+
+function updateFpsCounter(dt) {
+  if (!dt || dt <= 0) return;
+
+  fps.frames += 1;
+  fps.elapsed += dt;
+
+  if (fps.elapsed < 0.25) return;
+
+  fps.value = Math.round(fps.frames / fps.elapsed);
+  fps.frames = 0;
+  fps.elapsed = 0;
+
+  if (fps.visible) {
+    fpsCounter.textContent = `FPS ${fps.value}`;
+  }
 }
 
 function updateLoadingProgress(loaded, total) {
@@ -269,9 +424,13 @@ function loadLayer(src, options = {}) {
     image: loadImage(src),
     parallax: options.parallax ?? 1,
     alignY: options.alignY ?? "bottom",
+    verticalParallax: options.verticalParallax ?? 0,
+    tileY: options.tileY ?? false,
     groundAnchorRatio: options.groundAnchorRatio ?? 0.68,
     overlapRatio: options.overlapRatio ?? 0,
+    verticalOverlapRatio: options.verticalOverlapRatio ?? 0,
     featherRatio: options.featherRatio ?? 0,
+    scaleMultiplier: options.scaleMultiplier ?? 1,
     targetHeightRatio: options.targetHeightRatio ?? null,
     minTileWidthRatio: options.minTileWidthRatio ?? 1,
     opacity: options.opacity ?? 1,
@@ -451,6 +610,7 @@ function resize() {
     piggyback.x = daniel.x;
     piggyback.y = groundY;
     camera.zoom = cameraTargetZoom();
+    camera.y = cameraTargetY(camera.zoom);
     camera.x = cameraWorldLeftFor(averageFocusX(), camera.zoom);
     initialized = true;
   } else {
@@ -462,6 +622,7 @@ function resize() {
       syncCharactersToPiggyback();
     }
     camera.zoom = cameraTargetZoom();
+    camera.y = cameraTargetY(camera.zoom);
     camera.x = cameraWorldLeftFor(averageFocusX(), camera.zoom);
   }
 }
@@ -519,6 +680,7 @@ function update(dt) {
     characters.forEach((character) => updateCharacter(character, dt, rewinding));
   }
   updateCamera(dt);
+  updateMusicFlightEffect(dt);
 }
 
 function updateCharacter(character, dt, rewinding) {
@@ -869,7 +1031,7 @@ function updatePiggyback(dt, rewinding) {
     startPiggybackLanding(false);
   }
 
-  const flightCeiling = groundY - Math.max(180, height * 0.58);
+  const flightCeiling = piggybackFlightCeilingY();
   if (!piggyback.grounded && piggyback.y < flightCeiling) {
     piggyback.y = flightCeiling;
     piggyback.vy = Math.max(0, piggyback.vy);
@@ -957,11 +1119,11 @@ function applyPiggybackAirPhysics(dt, flightHeld) {
 
   if (flying && flightHeld) {
     const verticalAxis = piggybackFlightVerticalAxis();
-    const targetVy = verticalAxis < 0 ? -330 : verticalAxis > 0 ? 310 : 16;
+    const targetVy = verticalAxis < 0 ? -410 : verticalAxis > 0 ? 330 : 14;
     const response = verticalAxis === 0 ? 4.8 : 7.8;
     const blend = 1 - Math.pow(0.001, dt * response);
     piggyback.vy += (targetVy - piggyback.vy) * blend;
-    piggyback.vy = Math.max(-360, Math.min(330, piggyback.vy));
+    piggyback.vy = Math.max(-440, Math.min(360, piggyback.vy));
     return;
   }
 
@@ -1157,6 +1319,36 @@ function currentSpriteHeight(character) {
   return base * character.heightScale * camera.zoom;
 }
 
+function maxPiggybackFlightAltitude() {
+  return Math.max(flightZone.minHeight, height * flightZone.heightScreens);
+}
+
+function piggybackFlightCeilingY() {
+  return groundY - maxPiggybackFlightAltitude();
+}
+
+function flightCameraProgress() {
+  if (!isPiggybackVisible()) return 0;
+  const altitude = Math.max(0, groundY - piggyback.y);
+  return smoothstep(height * 0.18, height * 2.7, altitude);
+}
+
+function flightCameraLiftProgress() {
+  if (!isPiggybackVisible()) return 0;
+  const altitude = Math.max(0, groundY - piggyback.y);
+  return smoothstep(height * 0.22, height * 1.15, altitude);
+}
+
+function smoothstep(edge0, edge1, value) {
+  if (edge1 <= edge0) return value >= edge1 ? 1 : 0;
+  const t = Math.max(0, Math.min(1, (value - edge0) / (edge1 - edge0)));
+  return t * t * (3 - 2 * t);
+}
+
+function lerp(from, to, amount) {
+  return from + (to - from) * amount;
+}
+
 function averageFocusX() {
   if (isPiggybackVisible()) return piggyback.x;
   return characters.reduce((sum, character) => sum + character.x, 0) / characters.length;
@@ -1164,9 +1356,12 @@ function averageFocusX() {
 
 function updateCamera(dt) {
   const targetZoom = cameraTargetZoom();
+  const targetY = cameraTargetY(targetZoom);
   const follow = 1 - Math.pow(0.002, dt);
   const zoomFollow = 1 - Math.pow(0.01, dt);
+  const verticalFollow = 1 - Math.pow(0.0015, dt);
   camera.zoom += (targetZoom - camera.zoom) * zoomFollow;
+  camera.y += (targetY - camera.y) * verticalFollow;
   const targetX = cameraWorldLeftFor(averageFocusX(), camera.zoom);
   camera.x += (targetX - camera.x) * follow;
 }
@@ -1176,7 +1371,7 @@ function worldToScreenX(x) {
 }
 
 function worldToScreenY(y) {
-  return groundY - (groundY - y) * camera.zoom;
+  return groundY + (y - camera.y) * camera.zoom;
 }
 
 function cameraWorldLeftFor(centerX, zoom) {
@@ -1184,7 +1379,9 @@ function cameraWorldLeftFor(centerX, zoom) {
 }
 
 function cameraTargetZoom() {
-  if (isPiggybackVisible()) return 1;
+  if (isPiggybackVisible()) {
+    return lerp(1, flightZone.minZoom, flightCameraProgress());
+  }
 
   const span = Math.abs(daniel.x - girl.x);
   const zoomStartSpan = width * 0.45;
@@ -1200,6 +1397,17 @@ function cameraTargetZoom() {
 
   const progress = Math.max(0, Math.min(1, (span - zoomStartSpan) / Math.max(1, zoomFullSpan - zoomStartSpan)));
   return 1 - progress * 0.3;
+}
+
+function cameraTargetY(targetZoom) {
+  const flightProgress = flightCameraProgress();
+  const liftProgress = flightCameraLiftProgress();
+  if (liftProgress <= 0) return groundY;
+
+  const focusRatio = lerp(flightZone.focusStartRatio, flightZone.focusHighRatio, flightProgress);
+  const focusY = height * focusRatio;
+  const followY = piggyback.y + (groundY - focusY) / Math.max(0.001, targetZoom);
+  return lerp(groundY, Math.min(groundY, followY), liftProgress);
 }
 
 function areCharactersActivelySeparating() {
@@ -1222,14 +1430,18 @@ function drawStage() {
 }
 
 function drawGround() {
+  const screenGroundY = Math.round(worldToScreenY(groundY));
+  if (screenGroundY >= height) return;
+
+  const y = Math.max(-20, screenGroundY);
   ctx.fillStyle = "#6f7c52";
-  ctx.fillRect(0, groundY, width, height - groundY);
+  ctx.fillRect(0, y, width, height - y);
 
   ctx.fillStyle = "#4f6548";
-  ctx.fillRect(0, groundY + 12, width, height - groundY - 12);
+  ctx.fillRect(0, y + 12, width, height - y - 12);
 
   ctx.fillStyle = "rgba(55, 66, 43, 0.26)";
-  ctx.fillRect(0, groundY - 3, width, 6);
+  ctx.fillRect(0, y - 3, width, 6);
 }
 
 function drawLayerStack(layers) {
@@ -1247,10 +1459,14 @@ function drawTiledLayer(layer) {
   const drawY = layerY(layer, drawH);
   const stepX = drawW * (1 - layer.overlapRatio);
   const offsetX = -positiveModulo(camera.x * layer.parallax * zoom, stepX);
+  const stepY = Math.max(1, drawH * (1 - layer.verticalOverlapRatio));
+  const offsetY = layer.tileY ? drawY - positiveModulo((groundY - camera.y) * layer.verticalParallax, stepY) : drawY;
 
   ctx.save();
-  for (let x = offsetX - drawW; x < width + drawW; x += stepX) {
-    drawLayerTile(layer, image, x, drawY, drawW, drawH);
+  for (let y = layer.tileY ? offsetY - drawH : drawY; y < (layer.tileY ? height + drawH : drawY + 1); y += stepY) {
+    for (let x = offsetX - drawW; x < width + drawW; x += stepX) {
+      drawLayerTile(layer, image, x, y, drawW, drawH);
+    }
   }
   ctx.restore();
 }
@@ -1303,22 +1519,24 @@ function layerScale(layer) {
   if (layer.targetHeightRatio) {
     const heightScale = (height * layer.targetHeightRatio) / image.naturalHeight;
     const widthScale = (width * layer.minTileWidthRatio) / image.naturalWidth;
-    return Math.max(heightScale, widthScale);
+    return Math.max(heightScale, widthScale) * layer.scaleMultiplier;
   }
 
   if (layer.alignY !== "ground") {
-    return Math.max(width / image.naturalWidth, height / image.naturalHeight);
+    return Math.max(width / image.naturalWidth, height / image.naturalHeight) * layer.scaleMultiplier;
   }
 
   const belowGroundHeight = Math.max(1, height - groundY);
   const sourceBelowGround = Math.max(1, image.naturalHeight * (1 - layer.groundAnchorRatio));
-  return Math.max(width / image.naturalWidth, belowGroundHeight / sourceBelowGround);
+  return Math.max(width / image.naturalWidth, belowGroundHeight / sourceBelowGround) * layer.scaleMultiplier;
 }
 
 function layerY(layer, drawH) {
+  const screenGroundY = worldToScreenY(groundY);
   if (layer.alignY === "top") return 0;
-  if (layer.alignY === "ground") return groundY - drawH * layer.groundAnchorRatio;
-  return height - drawH;
+  if (layer.alignY === "sky") return 0;
+  if (layer.alignY === "ground") return screenGroundY - drawH * layer.groundAnchorRatio;
+  return height - drawH + (screenGroundY - groundY) * layer.verticalParallax;
 }
 
 function drawCharacter(character, x, feetY, t, options = {}) {
@@ -1351,11 +1569,12 @@ function drawPose(actor, pose, x, feetY, t, options = {}) {
   if (!ghost) {
     const heightAboveGround = Math.max(0, groundY - feetY);
     const shadowScale = Math.max(0.45, 1 - heightAboveGround / 520);
+    const shadowY = worldToScreenY(groundY);
     ctx.save();
     ctx.globalAlpha = 0.18 + shadowScale * 0.08;
     ctx.fillStyle = "rgb(55, 58, 45)";
     ctx.beginPath();
-    ctx.ellipse(x, groundY + 3, drawW * 0.28 * shadowScale, 11 * shadowScale, 0, 0, Math.PI * 2);
+    ctx.ellipse(x, shadowY + 3, drawW * 0.28 * shadowScale, 11 * shadowScale, 0, 0, Math.PI * 2);
     ctx.fill();
     ctx.restore();
   }
@@ -1703,9 +1922,11 @@ function render(t) {
 
 function frame(now) {
   const seconds = now / 1000;
-  const dt = Math.min(0.034, lastTime ? seconds - lastTime : 1 / 60);
+  const rawDt = lastTime ? seconds - lastTime : 1 / 60;
+  const dt = Math.min(0.034, rawDt);
   lastTime = seconds;
   elapsed += dt;
+  updateFpsCounter(rawDt);
   update(dt);
   render(elapsed);
   requestAnimationFrame(frame);
@@ -1737,8 +1958,12 @@ document.addEventListener("visibilitychange", () => {
 });
 
 window.addEventListener("keydown", (event) => {
-  if (["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Space", "ShiftLeft", "ShiftRight", "KeyA", "KeyD", "KeyW", "KeyS", "KeyR", "KeyM"].includes(event.code)) {
+  if (["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Space", "ShiftLeft", "ShiftRight", "KeyA", "KeyD", "KeyW", "KeyS", "KeyR", "KeyM", "Backquote"].includes(event.code)) {
     event.preventDefault();
+  }
+  if (event.code === "Backquote" && !event.repeat) {
+    toggleFpsCounter();
+    return;
   }
   if (event.code === "KeyM" && !event.repeat) {
     toggleMusicMute();
@@ -1790,6 +2015,7 @@ muteToggle.addEventListener("click", () => {
 });
 
 music.audio.addEventListener("ended", advanceMusicTrack);
+setFpsCounterVisible(fps.visible);
 setMusicMuted(music.muted);
 
 const characterSheets = [...characters.flatMap((character) => Object.values(character.sheets)), ...Object.values(piggybackSheets)];
